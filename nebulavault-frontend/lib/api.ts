@@ -148,6 +148,59 @@ export async function apiFetchFiles(params: {
   return request(`/files?${q.toString()}`);
 }
 
+export function apiUploadDirect(
+  file: globalThis.File,
+  folderId?: string | null,
+  onProgress?: (percent: number) => void
+): Promise<{ message: string; file: File }> {
+  return new Promise((resolve, reject) => {
+    const token = getToken();
+    const formData = new FormData();
+    formData.append('file', file);
+    if (folderId) {
+      formData.append('folderId', folderId);
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/files/upload`);
+
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        const percent = Math.round((e.loaded / e.total) * 100);
+        onProgress(percent);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const res = JSON.parse(xhr.responseText);
+          resolve(res);
+        } catch {
+          resolve({ message: 'Success', file: {} as any });
+        }
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          reject(new Error(err.error || `Upload failed with status ${xhr.status}`));
+        } catch {
+          reject(new Error(`Upload failed with status ${xhr.status}`));
+        }
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Network error during upload'));
+    };
+
+    xhr.send(formData);
+  });
+}
+
 export async function apiGetUploadTicket(data: {
   fileName: string;
   folderId?: string | null;

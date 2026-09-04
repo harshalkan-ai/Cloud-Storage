@@ -109,15 +109,11 @@ export default function DashboardPage() {
     }
   };
 
-  // View/Download file: calls GET /api/files/view/:id and opens in new tab
-  const handleViewFile = async (id: string) => {
-    try {
-      const res = await apiGetFileViewUrl(id);
-      if (res.url) {
-        window.open(res.url, '_blank');
-      }
-    } catch (err) {
-      console.error('Failed to get view link', err);
+  // In-platform File Preview: opens rich in-platform modal viewer
+  const handleViewFile = (id: string) => {
+    const file = files.find((f) => f.id === id);
+    if (file) {
+      setPreviewFile(file);
     }
   };
 

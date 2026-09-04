@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { apiGetUploadTicket, apiUploadToStorage } from '@/lib/api';
+import { apiUploadDirect, apiGetUploadTicket, apiUploadToStorage } from '@/lib/api';
 import { cn, formatFileSize } from '@/lib/utils';
 
 interface UploadFile {
@@ -69,24 +69,20 @@ export default function UploadModal({
 
       setFiles((prev) =>
         prev.map((f, idx) =>
-          idx === i ? { ...f, status: 'uploading', progress: 10 } : f
+          idx === i ? { ...f, status: 'uploading', progress: 5 } : f
         )
       );
 
       try {
         const { file } = files[i];
-        const ticket = await apiGetUploadTicket({
-          fileName: file.name,
-          folderId,
-          fileSize: file.size,
-          fileType: file.type,
+        
+        await apiUploadDirect(file, folderId, (percent: number) => {
+          setFiles((prev) =>
+            prev.map((f, idx) =>
+              idx === i ? { ...f, progress: Math.min(percent, 95) } : f
+            )
+          );
         });
-
-        setFiles((prev) =>
-          prev.map((f, idx) => (idx === i ? { ...f, progress: 40 } : f))
-        );
-
-        await apiUploadToStorage(ticket.uploadUrl, file);
 
         setFiles((prev) =>
           prev.map((f, idx) =>
@@ -94,13 +90,30 @@ export default function UploadModal({
           )
         );
       } catch (err: any) {
-        setFiles((prev) =>
-          prev.map((f, idx) =>
-            idx === i
-              ? { ...f, status: 'error', errorMsg: err.message }
-              : f
-          )
-        );
+        // Fallback to presigned ticket upload if direct fails
+        try {
+          const { file } = files[i];
+          const ticket = await apiGetUploadTicket({
+            fileName: file.name,
+            folderId,
+            fileSize: file.size,
+            fileType: file.type,
+          });
+          await apiUploadToStorage(ticket.uploadUrl, file);
+          setFiles((prev) =>
+            prev.map((f, idx) =>
+              idx === i ? { ...f, status: 'done', progress: 100 } : f
+            )
+          );
+        } catch (fallbackErr: any) {
+          setFiles((prev) =>
+            prev.map((f, idx) =>
+              idx === i
+                ? { ...f, status: 'error', errorMsg: fallbackErr.message || err.message }
+                : f
+            )
+          );
+        }
       }
     }
     onUploaded();

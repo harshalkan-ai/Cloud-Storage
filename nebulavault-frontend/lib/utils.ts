@@ -20,7 +20,7 @@ export function getFileExtension(filename: string): string {
 export function isImage(type: string, name: string): boolean {
   return (
     type.startsWith('image/') ||
-    ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(
+    ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(
       getFileExtension(name)
     )
   );
@@ -28,6 +28,27 @@ export function isImage(type: string, name: string): boolean {
 
 export function isPdf(type: string, name: string): boolean {
   return type === 'application/pdf' || getFileExtension(name) === 'pdf';
+}
+
+export function isVideo(type: string, name: string): boolean {
+  return type.startsWith('video/') || ['mp4', 'webm', 'ogg', 'mov', 'mkv', 'avi'].includes(getFileExtension(name));
+}
+
+export function isAudio(type: string, name: string): boolean {
+  return type.startsWith('audio/') || ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(getFileExtension(name));
+}
+
+export function isTextOrCode(type: string, name: string): boolean {
+  const ext = getFileExtension(name);
+  return (
+    type.startsWith('text/') ||
+    ['txt', 'md', 'json', 'js', 'jsx', 'ts', 'tsx', 'html', 'css', 'scss', 'py', 'c', 'cpp', 'java', 'go', 'rs', 'sql', 'csv', 'xml', 'yaml', 'yml', 'sh', 'env', 'log'].includes(ext)
+  );
+}
+
+export function isOfficeDoc(type: string, name: string): boolean {
+  const ext = getFileExtension(name);
+  return ['docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls'].includes(ext);
 }
 
 export function getFileColorClass(type: string, name: string): string {

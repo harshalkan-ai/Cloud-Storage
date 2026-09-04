@@ -19,9 +19,16 @@ function ensureValidUuid(id: string): string {
     return `${hash.substring(0, 8)}-${hash.substring(8, 12)}-4${hash.substring(13, 16)}-a${hash.substring(17, 20)}-${hash.substring(20, 32)}`;
 }
 
+// In-memory cache to prevent repeated DB upserts on every API call
+const verifiedUsersCache = new Set<string>();
+
 // Guarantee that the user ID exists in both auth.users and profiles table
 // to satisfy all database foreign key constraints (folders_owner_id_fkey, files_owner_id_fkey)
 export async function ensureUserExistsInDb(userId: string, email?: string, fullName?: string) {
+    if (verifiedUsersCache.has(userId)) {
+        return;
+    }
+
     const userEmail = email || `user_${userId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 8)}@gmail.com`;
     const name = fullName || 'User';
 
@@ -45,8 +52,10 @@ export async function ensureUserExistsInDb(userId: string, email?: string, fullN
         await supabaseAdmin.from('profiles').upsert([
             { id: userId, email: userEmail, full_name: name }
         ]);
+        verifiedUsersCache.add(userId);
     } catch {
         // Non-critical
+        verifiedUsersCache.add(userId);
     }
 }
 
@@ -66,7 +75,22 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     req.token = token;
     req.supabaseClient = getAuthSupabase(token);
 
-    // 1. Try Supabase Auth token verification first
+    // 1. Fast-path: Check local JWT token verification first (instant, 0 network latency)
+    try {
+        const decoded: any = jwt.verify(token, JWT_SECRET);
+        const validId = ensureValidUuid(decoded.id);
+        req.user = {
+            id: validId,
+            email: decoded.email,
+            fullName: decoded.fullName || decoded.name || 'User',
+        };
+        await ensureUserExistsInDb(validId, decoded.email, req.user.fullName);
+        return next();
+    } catch {
+        // Not a local JWT, fallback to Supabase session token
+    }
+
+    // 2. Fallback: Supabase Auth token verification
     try {
         const { data: { user }, error } = await supabase.auth.getUser(token);
         if (!error && user) {
@@ -74,25 +98,14 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
             req.user = {
                 ...user,
                 id: validId,
+                fullName: user.user_metadata?.full_name || 'User',
             };
             await ensureUserExistsInDb(validId, user.email, user.user_metadata?.full_name);
             return next();
         }
     } catch {
-        // Fallback to local JWT verification
+        // Token invalid
     }
 
-    // 2. Try local JWT token verification
-    try {
-        const decoded: any = jwt.verify(token, JWT_SECRET);
-        const validId = ensureValidUuid(decoded.id);
-        req.user = {
-            id: validId,
-            email: decoded.email,
-        };
-        await ensureUserExistsInDb(validId, decoded.email);
-        return next();
-    } catch {
-        return res.status(401).json({ error: 'Invalid or expired token' });
-    }
+    return res.status(401).json({ error: 'Invalid or expired token' });
 };

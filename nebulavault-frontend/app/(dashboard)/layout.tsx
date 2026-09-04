@@ -37,12 +37,6 @@ export default function DashboardLayout({
 
   const triggerRefresh = () => setRefreshKey((prev) => prev + 1);
 
-  // Once auth finishes loading and user is confirmed, trigger an initial data fetch
-  useEffect(() => {
-    if (!loading && user) {
-      setRefreshKey((prev) => prev + 1);
-    }
-  }, [loading, user]);
 
   // Show loading spinner until auth is resolved
   if (loading) {

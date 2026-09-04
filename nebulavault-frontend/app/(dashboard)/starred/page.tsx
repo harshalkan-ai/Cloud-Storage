@@ -55,14 +55,10 @@ export default function StarredPage() {
     }
   };
 
-  const handleViewFile = async (id: string) => {
-    try {
-      const res = await apiGetFileViewUrl(id);
-      if (res.url) {
-        window.open(res.url, '_blank');
-      }
-    } catch (err) {
-      console.error('Failed to get view link', err);
+  const handleViewFile = (id: string) => {
+    const file = files.find((f) => f.id === id);
+    if (file) {
+      setPreviewFile(file);
     }
   };
 

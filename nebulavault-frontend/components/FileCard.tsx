@@ -58,11 +58,8 @@ export default function FileCard({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="border-[#dadce0]">
         <DropdownMenuItem onClick={() => onView(file.id)}>
-          {canPreview ? (
-            <><Eye className="h-4 w-4 text-[#5f6368]" />Preview</>
-          ) : (
-            <><Download className="h-4 w-4 text-[#5f6368]" />Download</>
-          )}
+          <Eye className="h-4 w-4 text-[#5f6368]" />
+          View & Preview
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onToggleStar(file.id, file.is_starred)}>
           <Star className={cn('h-4 w-4 text-[#5f6368]', file.is_starred && 'fill-amber-400 text-amber-400')} />

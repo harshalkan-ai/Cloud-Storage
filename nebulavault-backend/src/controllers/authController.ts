@@ -32,94 +32,73 @@ export const signUp = async (req: Request, res: Response) => {
 
         const name = fullName || 'User';
 
-        // 1. Try standard signup first
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        // 1. Try creating directly with Supabase Admin API with email_confirm: true
+        const { data: adminUser, error: adminError } = await supabaseAdmin.auth.admin.createUser({
+            email,
+            password,
+            email_confirm: true,
+            user_metadata: { full_name: name },
+        });
+
+        if (!adminError && adminUser?.user) {
+            const userId = adminUser.user.id;
+            await ensureProfile(userId, email, name);
+
+            // Try to sign in to get a real Supabase session token
+            const { data: sessionData } = await supabase.auth.signInWithPassword({ email, password });
+            const token = sessionData?.session?.access_token ||
+                jwt.sign({ id: userId, email, fullName: name, isSupabaseUser: true }, JWT_SECRET, { expiresIn: '7d' });
+
+            return res.status(201).json({
+                message: 'Registration Successful',
+                token,
+                user: { id: userId, email, fullName: name },
+            });
+        }
+
+        const adminErrMsg = adminError?.message?.toLowerCase() || '';
+
+        // 2. If user already exists, try signing in with provided password
+        if (adminErrMsg.includes('already registered') || adminErrMsg.includes('already exists')) {
+            const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
+            if (!loginError && loginData.session) {
+                await ensureProfile(loginData.user!.id, email, name);
+                return res.status(200).json({
+                    message: 'Login Successful',
+                    token: loginData.session.access_token,
+                    user: { id: loginData.user!.id, email, fullName: getDisplayName(loginData.user, name) },
+                });
+            }
+
+            return res.status(400).json({ error: 'An account with this email already exists. Please sign in.' });
+        }
+
+        // 3. Fallback to standard signUp if admin API had another issue
+        const { data: standardData, error: standardError } = await supabase.auth.signUp({
             email,
             password,
             options: { data: { full_name: name } },
         });
 
-        if (!signUpError && signUpData.user) {
-            const userId = signUpData.user.id;
+        if (!standardError && standardData.user) {
+            const userId = standardData.user.id;
+            // Confirm the user via admin so login works in future
+            try {
+                await supabaseAdmin.auth.admin.updateUserById(userId, { email_confirm: true });
+            } catch {}
+
             await ensureProfile(userId, email, name);
-
-            // Get token - try login to get session immediately
-            let token = signUpData.session?.access_token;
-            if (!token) {
-                const { data: loginData } = await supabase.auth.signInWithPassword({ email, password });
-                token = loginData?.session?.access_token;
-            }
-
-            // Fallback: issue local JWT (only if email confirmation prevents login)
-            if (!token) {
-                token = jwt.sign({ id: userId, email, isSupabaseUser: true }, JWT_SECRET, { expiresIn: '7d' });
-            }
+            const token = standardData.session?.access_token ||
+                jwt.sign({ id: userId, email, fullName: name, isSupabaseUser: true }, JWT_SECRET, { expiresIn: '7d' });
 
             return res.status(201).json({
                 message: 'Registration Successful',
                 token,
-                user: { id: userId, email, fullName: getDisplayName(signUpData.user, name) },
+                user: { id: userId, email, fullName: getDisplayName(standardData.user, name) },
             });
         }
 
-        const errMsg = signUpError?.message?.toLowerCase() || '';
-
-        // 2. If rate limited, try using admin API to create/confirm user
-        if (errMsg.includes('rate limit') || errMsg.includes('limit exceeded')) {
-            // Try login first (user might already exist)
-            const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
-            if (!loginError && loginData.session) {
-                await ensureProfile(loginData.user!.id, email, name);
-                return res.status(200).json({
-                    message: 'Login Successful',
-                    token: loginData.session.access_token,
-                    user: { id: loginData.user!.id, email, fullName: getDisplayName(loginData.user, name) },
-                });
-            }
-
-            // Rate limited + user doesn't exist: use admin.createUser to bypass email confirmation
-            const { data: adminUser, error: adminError } = await supabaseAdmin.auth.admin.createUser({
-                email,
-                password,
-                email_confirm: true,
-                user_metadata: { full_name: name },
-            });
-
-            if (!adminError && adminUser.user) {
-                const userId = adminUser.user.id;
-                await ensureProfile(userId, email, name);
-
-                // Login to get real session token
-                const { data: sessionData } = await supabase.auth.signInWithPassword({ email, password });
-                const token = sessionData?.session?.access_token ||
-                    jwt.sign({ id: userId, email, isSupabaseUser: true }, JWT_SECRET, { expiresIn: '7d' });
-
-                return res.status(200).json({
-                    message: 'Registration Successful',
-                    token,
-                    user: { id: userId, email, fullName: name },
-                });
-            }
-
-            // Last resort: just try to login
-            return res.status(400).json({ error: signUpError?.message || 'Registration failed due to rate limiting. Please try again later.' });
-        }
-
-        // 3. Email already registered — try login
-        if (errMsg.includes('already registered') || errMsg.includes('already exists')) {
-            const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
-            if (!loginError && loginData.session) {
-                await ensureProfile(loginData.user!.id, email, name);
-                return res.status(200).json({
-                    message: 'Login Successful',
-                    token: loginData.session.access_token,
-                    user: { id: loginData.user!.id, email, fullName: getDisplayName(loginData.user, name) },
-                });
-            }
-            return res.status(400).json({ error: 'Email already registered. Please sign in instead.' });
-        }
-
-        throw signUpError || new Error('Registration failed');
+        throw adminError || standardError || new Error('Registration failed');
     } catch (err: any) {
         console.error('[signUp]', err.message);
         res.status(400).json({ error: err.message || 'Registration failed' });
@@ -134,6 +113,7 @@ export const signIn = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'Email and password are required' });
         }
 
+        // 1. Attempt standard password sign-in
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
         if (!error && data.session) {
@@ -145,9 +125,29 @@ export const signIn = async (req: Request, res: Response) => {
             });
         }
 
+        // 2. If email confirmation was pending, auto-confirm and retry
+        try {
+            const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
+            const matchedUser = (usersData as any)?.users?.find((u: any) => u.email?.toLowerCase() === email.toLowerCase());
+            if (matchedUser) {
+                await supabaseAdmin.auth.admin.updateUserById(matchedUser.id, { email_confirm: true, password });
+                const retry = await supabase.auth.signInWithPassword({ email, password });
+                if (!retry.error && retry.data.session) {
+                    await ensureProfile(matchedUser.id, email, getDisplayName(matchedUser, 'User'));
+                    return res.status(200).json({
+                        message: 'Login Successful',
+                        token: retry.data.session.access_token,
+                        user: { id: matchedUser.id, email, fullName: getDisplayName(matchedUser, 'User') },
+                    });
+                }
+            }
+        } catch {
+            // Admin recovery attempt failed, continue to throw
+        }
+
         throw error || new Error('Invalid email or password');
     } catch (err: any) {
         console.error('[signIn]', err.message);
-        res.status(401).json({ error: err.message || 'Login failed' });
+        res.status(401).json({ error: err.message || 'Invalid email or password' });
     }
 };

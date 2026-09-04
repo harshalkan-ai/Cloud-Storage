@@ -2,8 +2,77 @@ import { Response } from 'express';
 import { supabaseAdmin } from '../config/supabase';
 import { AuthRequest, ensureUserExistsInDb } from '../middleware/authMiddleware';
 import crypto from 'crypto';
+import multer from 'multer';
 
-// 1. Get a Presigned Upload URL Ticket
+export const uploadMiddleware = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB max
+});
+
+// 1. Direct Multipart Fast Upload (No client-side CORS issues, real progress)
+export const uploadFileDirect = async (req: AuthRequest, res: Response) => {
+    try {
+        const file = req.file;
+        if (!file) {
+            return res.status(400).json({ error: 'No file provided in request' });
+        }
+
+        const userId = req.user.id;
+        const folderId = req.body.folderId || null;
+        const originalName = file.originalname;
+        const fileId = crypto.randomUUID();
+        const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = `${userId}/${Date.now()}-${safeName}`;
+
+        // Ensure user exists in DB foreign keys
+        await ensureUserExistsInDb(userId, req.user.email, req.user.fullName);
+
+        // Upload buffer directly to Supabase storage bucket 'vault'
+        const { error: uploadError } = await supabaseAdmin.storage
+            .from('vault')
+            .upload(storagePath, file.buffer, {
+                contentType: file.mimetype || 'application/octet-stream',
+                upsert: true,
+            });
+
+        if (uploadError) {
+            console.error('[uploadFileDirect] Storage upload error:', uploadError.message);
+            return res.status(500).json({ error: 'Storage upload failed: ' + uploadError.message });
+        }
+
+        // Insert metadata record in files table
+        const { data: fileData, error: dbError } = await supabaseAdmin
+            .from('files')
+            .insert([{
+                id: fileId,
+                name: originalName,
+                storage_path: storagePath,
+                owner_id: userId,
+                folder_id: folderId || null,
+                size: file.size,
+                type: file.mimetype || 'application/octet-stream',
+                is_starred: false,
+                is_deleted: false,
+            }])
+            .select()
+            .single();
+
+        if (dbError) {
+            console.error('[uploadFileDirect] DB error:', dbError.message);
+            return res.status(500).json({ error: 'Failed to record file metadata: ' + dbError.message });
+        }
+
+        res.status(200).json({
+            message: 'File uploaded successfully',
+            file: fileData,
+        });
+    } catch (err: any) {
+        console.error('[uploadFileDirect]', err.message);
+        res.status(500).json({ error: err.message || 'Upload failed' });
+    }
+};
+
+// 2. Get a Presigned Upload URL Ticket (Fallback)
 export const getUploadUrl = async (req: AuthRequest, res: Response) => {
     try {
         const { fileName, folderId, fileSize, fileType } = req.body;
@@ -14,7 +83,7 @@ export const getUploadUrl = async (req: AuthRequest, res: Response) => {
         }
 
         // Guarantee user exists in database to satisfy foreign keys
-        await ensureUserExistsInDb(userId, req.user.email);
+        await ensureUserExistsInDb(userId, req.user.email, req.user.fullName);
 
         const fileId = crypto.randomUUID();
         const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
